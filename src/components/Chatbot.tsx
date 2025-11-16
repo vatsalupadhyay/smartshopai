@@ -13,22 +13,38 @@ interface Message {
 }
 
 export const Chatbot = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { toast } = useToast();
   
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content: t("chatbot.initialMessage", "Hello! I'm your SmartShop AI assistant. I can help you compare products, analyze reviews, and find the best deals. What are you looking for today?"),
-    },
-  ]);
+  const STORAGE_KEY = 'smartshop_chat_v1';
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw) as Message[];
+    } catch (e) {
+      /* ignore */
+    }
+    return [
+      {
+        role: "assistant",
+        content: t("chatbot.initialMessage", "Hello! I'm your SmartShop AI assistant. I can help you compare products, analyze reviews, and find the best deals. What are you looking for today?"),
+      },
+    ];
+  });
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [productUrl, setProductUrl] = useState<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    } catch (e) {
+      // ignore storage errors
     }
   }, [messages]);
 
@@ -42,111 +58,202 @@ export const Chatbot = () => {
 
     try {
       const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
-      
+      console.log('Chat endpoint:', CHAT_URL);
+
+      // Basic sanity checks for the configured supabase URL to produce a clearer error
+      if (!import.meta.env.VITE_SUPABASE_URL || typeof import.meta.env.VITE_SUPABASE_URL !== 'string' || !import.meta.env.VITE_SUPABASE_URL.startsWith('http')) {
+        const msg = `Supabase URL is not configured correctly. Current value: ${String(import.meta.env.VITE_SUPABASE_URL)}`;
+        console.error(msg);
+        toast({ title: t('common.error'), description: msg, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+      type OutgoingMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+      const payloadMessages: OutgoingMessage[] = [...messages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage.content }];
+      // if product URL is attached, add it as a system message context before user messages
+      if (productUrl) {
+        payloadMessages.unshift({ role: 'system', content: `Product URL: ${productUrl}` });
+      }
+
+      const targetLang = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0];
       const response = await fetch(CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
+        body: JSON.stringify({ messages: payloadMessages, targetLang }),
       });
 
       if (!response.ok) {
+        // try to extract JSON error body for better messages
+        let errText = "Failed to get response";
+        try {
+          const body = await response.text();
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              errText = parsed?.error || parsed?.message || body;
+            } catch {
+              errText = body;
+            }
+          }
+  } catch (e) { console.warn('Failed to read error body', e); }
+
         if (response.status === 429) {
-          throw new Error("Rate limit exceeded. Please try again later.");
+          throw new Error(`Rate limit exceeded. ${errText}`);
         }
         if (response.status === 402) {
-          throw new Error("Payment required. Please add funds to continue.");
+          throw new Error(`Payment required. ${errText}`);
         }
-        throw new Error("Failed to get response");
+        throw new Error(errText || "Failed to get response");
       }
 
-      if (!response.body) throw new Error("No response body");
+      if (!response.body) {
+        // no streaming body — try to read as JSON/text
+        const text = await response.text().catch(() => "");
+        const assistantText = text || t('chat.error.noResponse');
+        setMessages(prev => [...prev, { role: 'assistant', content: assistantText }]);
+      } else {
+        const contentType = response.headers.get('content-type') || '';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let assistantContent = '';
+        let buffer = '';
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = "";
-      let textBuffer = "";
-      let streamDone = false;
+        // Add empty assistant message that will be updated
+        setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
-      // Add empty assistant message that will be updated
-      setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+        // If server uses SSE (data: ...), parse accordingly. If server sends raw JSON chunks/NDJSON, also attempt to parse.
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
 
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
+          // Try SSE-style lines first
+          if (buffer.includes('\n')) {
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (let line of lines) {
+              if (line.endsWith('\r')) line = line.slice(0, -1);
+              if (!line) continue;
 
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
+              // SSE 'data: ' prefix
+              if (line.startsWith('data: ')) {
+                const jsonStr = line.slice(6).trim();
+                if (jsonStr === '[DONE]') {
+                  buffer = '';
+                  break;
+                }
+                try {
+                  const parsed = JSON.parse(jsonStr);
+                  const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+                  if (content) {
+                    assistantContent += content;
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      newMessages[newMessages.length - 1].content = assistantContent;
+                      return newMessages;
+                    });
+                  }
+                } catch (e) {
+                  // ignore parse errors for this line
+                  console.warn('SSE parse error', e);
+                }
+                continue;
+              }
 
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (line.startsWith(":") || line.trim() === "") continue;
-          if (!line.startsWith("data: ")) continue;
-
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === "[DONE]") {
-            streamDone = true;
-            break;
-          }
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) {
-              assistantContent += content;
-              setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1].content = assistantContent;
-                return newMessages;
-              });
+              // Try NDJSON/raw JSON per-line
+              try {
+                const parsed = JSON.parse(line);
+                // handle both full response and streaming deltas
+                const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+                const fullText = parsed.choices?.[0]?.message?.content as string | undefined;
+                if (content || fullText) {
+                  assistantContent += (content || fullText || '');
+                  setMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1].content = assistantContent;
+                    return newMessages;
+                  });
+                }
+                continue;
+              } catch {
+                // not JSON — append as plain text
+                assistantContent += line + '\n';
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1].content = assistantContent;
+                  return newMessages;
+                });
+              }
             }
-          } catch {
-            textBuffer = line + "\n" + textBuffer;
-            break;
           }
         }
-      }
 
-      // Final flush
-      if (textBuffer.trim()) {
-        for (const raw of textBuffer.split("\n")) {
-          if (!raw || raw.startsWith(":")) continue;
-          if (!raw.startsWith("data: ")) continue;
-          const jsonStr = raw.slice(6).trim();
-          if (jsonStr === "[DONE]") continue;
+        // Final buffer flush: attempt to parse remainder
+        if (buffer.trim()) {
           try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) {
-              assistantContent += content;
-              setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1].content = assistantContent;
-                return newMessages;
-              });
+            if (buffer.startsWith('data: ')) {
+              const jsonStr = buffer.slice(6).trim();
+              if (jsonStr !== '[DONE]') {
+                const parsed = JSON.parse(jsonStr);
+                const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+                if (content) {
+                  assistantContent += content;
+                }
+              }
+            } else {
+              const parsed = JSON.parse(buffer);
+              const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+              const fullText = parsed.choices?.[0]?.message?.content as string | undefined;
+              if (content || fullText) assistantContent += (content || fullText || '');
             }
-          } catch (parseError) {
-            console.warn('JSON parse error:', parseError);
+          } catch (e) {
+            // append raw remainder
+            assistantContent += buffer;
           }
+
+          setMessages(prev => {
+            const newMessages = [...prev];
+            newMessages[newMessages.length - 1].content = assistantContent;
+            return newMessages;
+          });
         }
       }
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage = error instanceof Error ? error.message : "Failed to send message";
+      // Map known errors to localized messages
+      let userMsg = errorMessage;
+      if (errorMessage.includes('Rate limit')) {
+        userMsg = t('chat.error.rateLimit');
+      } else if (errorMessage.includes('Payment required')) {
+        userMsg = t('chat.error.paymentRequired');
+      } else if (errorMessage.includes('No response body')) {
+        userMsg = t('chat.error.noResponse');
+      } else if (errorMessage.includes('Failed to get response')) {
+        userMsg = t('chat.error.failedResponse');
+      }
+
       toast({
-        title: "Error",
-        description: errorMessage,
+        title: t('common.error'),
+        description: userMsg,
         variant: "destructive",
       });
-      // Remove the empty assistant message on error
       setMessages(prev => prev.slice(0, -1));
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleClear = () => {
+    const initial: Message[] = [
+      { role: 'assistant', content: t('chatbot.initialMessage', "Hello! I'm your SmartShop AI assistant. I can help you compare products, analyze reviews, and find the best deals. What are you looking for today?") }
+    ];
+    setMessages(initial);
+    setProductUrl(undefined);
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
   };
 
   return (
@@ -212,13 +319,19 @@ export const Chatbot = () => {
             </ScrollArea>
 
             <div className="flex gap-2 pt-4 border-t">
-              <Input
-                placeholder={t("chatbot.placeholder")}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSend()}
-                disabled={isLoading}
-              />
+              <div className="flex-1">
+                <Input
+                  placeholder={t("chatbot.placeholder")}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && handleSend()}
+                  disabled={isLoading}
+                />
+                <div className="flex gap-2 mt-2">
+                  <Input placeholder={t('chatbot.productUrlPlaceholder')} value={productUrl || ''} onChange={(e) => setProductUrl(e.target.value || undefined)} />
+                  <Button size="sm" variant="ghost" onClick={() => { if (productUrl) { toast({ title: t('chatbot.attachedTitle'), description: t('chatbot.attachedDesc') }); } else { toast({ title: t('chatbot.noUrlTitle'), description: t('chatbot.noUrlDesc') }); } }}>{t('chatbot.attach')}</Button>
+                </div>
+              </div>
               <Button 
                 onClick={handleSend} 
                 variant="accent" 
@@ -227,6 +340,7 @@ export const Chatbot = () => {
               >
                 <Send className="w-4 h-4" />
               </Button>
+              <Button onClick={handleClear} variant="ghost" size="icon" title={t('chatbot.clearChat')}>✕</Button>
             </div>
           </CardContent>
         </Card>

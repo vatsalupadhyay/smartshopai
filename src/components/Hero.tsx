@@ -62,7 +62,7 @@ export const Hero = () => {
               <div className="text-sm text-muted-foreground mt-1">{t("hero.stats.priceTracking")}</div>
             </div>
             <div className="flex flex-col items-center">
-              <div className="text-3xl md:text-4xl font-bold bg-gradient-accent bg-clip-text text-transparent">50+</div>
+              <div className="text-3xl md:text-4xl font-bold bg-gradient-accent bg-clip-text text-transparent">3+</div>
               <div className="text-sm text-muted-foreground mt-1">{t("hero.stats.languagesSupported")}</div>
             </div>
           </div>

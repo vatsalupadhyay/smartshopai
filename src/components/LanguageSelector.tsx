@@ -22,10 +22,12 @@ export const LanguageSelector = () => {
     i18n.changeLanguage(value);
   };
 
+  const currentLang = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0];
+
   return (
     <div className="flex items-center gap-2">
       <Globe className="w-4 h-4 text-muted-foreground" />
-      <Select value={i18n.language} onValueChange={handleLanguageChange}>
+      <Select value={currentLang} onValueChange={handleLanguageChange}>
         <SelectTrigger className="w-[140px] border-none focus:ring-0">
           <SelectValue />
         </SelectTrigger>

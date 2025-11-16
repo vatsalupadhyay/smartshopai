@@ -11,65 +11,91 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { messages } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const { messages, targetLang } = await req.json();
+
+    if (!messages || !Array.isArray(messages)) {
+      return new Response(
+        JSON.stringify({ error: 'Messages array is required' }), 
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
     }
 
-    console.log('Chat request received with', messages.length, 'messages');
+    const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY');
+    
+    if (!GROQ_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: 'Groq API key not configured' }), 
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
+    }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
+    // Build system prompt
+    const systemPrompt = `You are a helpful shopping assistant AI for SmartShop. You help users:
+- Analyze products from URLs (Amazon, eBay, etc.)
+- Compare prices and features
+- Summarize product reviews
+- Provide buying recommendations
+- Answer questions about products
+
+Be conversational, helpful, and provide detailed product insights. Respond in ${targetLang || 'English'}.`;
+
+    // Convert messages to OpenAI format
+    const apiMessages = [
+      { role: 'system', content: systemPrompt },
+      ...messages.filter((msg: any) => msg.role !== 'system').map((msg: any) => ({
+        role: msg.role,
+        content: msg.content
+      }))
+    ];
+
+    // Call Groq API with updated model name
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { 
-            role: "system", 
-            content: "You are SmartShop AI Assistant, an expert shopping advisor. Help users make informed buying decisions by:\n- Comparing products based on features, price, and value\n- Providing honest product recommendations\n- Analyzing shopping trends and deals\n- Giving advice on when to buy products\n- Explaining product specifications clearly\nBe concise, helpful, and focus on practical shopping advice."
-          },
-          ...messages,
-        ],
+        model: 'llama-3.3-70b-versatile',
+        messages: apiMessages,
+        temperature: 0.7,
+        max_tokens: 2048,
         stream: true,
       }),
     });
 
     if (!response.ok) {
-      if (response.status === 429) {
-        console.error("Rate limit exceeded");
-        return new Response(JSON.stringify({ error: "Rate limits exceeded, please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        console.error("Payment required");
-        return new Response(JSON.stringify({ error: "Payment required, please add funds to your workspace." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      const error = await response.text();
+      console.error('Groq API error:', error);
+      throw new Error(`Groq API error: ${error}`);
     }
 
+    // Groq returns OpenAI-compatible streaming
     return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
+
   } catch (error) {
-    console.error("Chat error:", error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error('Chat error:', error);
+    return new Response(
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }), 
+      { 
+        status: 500, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
+    );
   }
 });

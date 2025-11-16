@@ -25,14 +25,24 @@ export const ReviewDetection = () => {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [scrapingLogs, setScrapingLogs] = useState<string[]>([]);
+  const [extractedReviews, setExtractedReviews] = useState<string[]>([]);
   const { toast } = useToast();
   const { t } = useTranslation();
+  const [summaryLang, setSummaryLang] = useState<string>('en');
+  type SummaryResult = {
+    languageDetected: string;
+    summary: string;
+    translatedSummary?: string | null;
+    pros: { term: string; count: number }[];
+    cons: { term: string; count: number }[];
+    inputCount: number;
+  } | null;
+  const [summaryResult, setSummaryResult] = useState<SummaryResult>(null);
 
   const analyzeReviews = async () => {
     if (!url.trim()) {
       toast({
-        title: "Error",
-        description: "Please enter a product URL",
+        title: t("reviewDetection.enterUrlError"),
         variant: "destructive",
       });
       return;
@@ -47,35 +57,65 @@ export const ReviewDetection = () => {
         body: { url },
       });
 
-      if (error) throw error;
+      // surface any function invocation errors with details
+      if (error) {
+        console.error('analyze-reviews invocation error:', error);
+        const errObj = error as unknown as { message?: string };
+        throw new Error(errObj?.message || JSON.stringify(error));
+      }
 
       console.log("Analysis results:", data);
       setResults(data.analysis);
-      if (data.logs) {
-        setScrapingLogs(data.logs);
+
+      // Merge logs if present
+      if (data.logs && Array.isArray(data.logs)) {
+        setScrapingLogs((prev) => [...prev, ...data.logs]);
       }
-      
-      // Log extracted reviews for display
-      if (data.reviews) {
-        setScrapingLogs([
+
+      // Save extracted reviews separately and also append a summary log
+      if (data.reviews && Array.isArray(data.reviews)) {
+        setExtractedReviews(data.reviews as string[]);
+        setScrapingLogs((prev) => [
+          ...prev,
           `✅ Successfully extracted ${data.reviewsCount} reviews`,
           `📝 Sample reviews:`,
-          ...data.reviews.map((r: string, i: number) => `  ${i + 1}. ${r.substring(0, 100)}...`)
+          ...((data.reviews as string[]).slice(0, 10).map((r: string, i: number) => `  ${i + 1}. ${r.substring(0, 120)}...`))
         ]);
       }
 
+  // clear previous summary when new analysis runs
+  setSummaryResult(null);
+
       toast({
-        title: "Analysis Complete",
-        description: "Review analysis has been completed successfully",
+        title: t("reviewDetection.analysisCompleteTitle"),
+        description: t("reviewDetection.analysisCompleteDesc"),
       });
     } catch (error) {
       console.error("Analysis error:", error);
       const errorMsg = error instanceof Error ? error.message : String(error);
       toast({
-        title: "Analysis Failed",
-        description: errorMsg || "Failed to analyze reviews",
+        title: t("reviewDetection.analysisFailedTitle"),
+        description: errorMsg || t("reviewDetection.analysisFailedDesc"),
         variant: "destructive",
       });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const summarizeReviews = async (lang = 'en') => {
+    if (extractedReviews.length === 0) {
+      toast({ title: t('reviewDetection.noReviewsTitle'), description: t('reviewDetection.noReviewsDesc'), variant: 'destructive' });
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('summarize-reviews', { body: { reviews: extractedReviews, targetLang: lang } });
+      if (error) throw error;
+      setSummaryResult(data);
+      toast({ title: t('reviewDetection.summaryReadyTitle'), description: t('reviewDetection.summaryReadyDesc', { lang: data.languageDetected }) });
+    } catch (e) {
+      toast({ title: t('reviewDetection.summaryFailedTitle'), description: t('reviewDetection.summaryFailedDesc', { err: String(e) }), variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -211,10 +251,10 @@ export const ReviewDetection = () => {
             {scrapingLogs.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>🔍 Scraping Logs</CardTitle>
-                </CardHeader>
+                      <CardTitle>{t('reviewDetection.scrapingLogsTitle')}</CardTitle>
+                    </CardHeader>
                 <CardContent>
-                  <div className="bg-gray-900 text-gray-100 p-4 rounded font-mono text-sm max-h-96 overflow-y-auto">
+                    <div className="bg-gray-900 text-gray-100 p-4 rounded font-mono text-sm max-h-96 overflow-y-auto">
                     {scrapingLogs.map((log, idx) => (
                       <div key={idx} className="py-1">
                         {log}
@@ -224,6 +264,113 @@ export const ReviewDetection = () => {
                 </CardContent>
               </Card>
             )}
+
+              {extractedReviews.length > 0 && (
+                <Card>
+                  <CardHeader className="flex items-center justify-between">
+                        <div>
+                          <CardTitle>{t('reviewDetection.extractedReviewsTitle')}</CardTitle>
+                          <CardDescription>{t('reviewDetection.extractedReviewsDesc', { count: extractedReviews.length })}</CardDescription>
+                        </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(extractedReviews.join('\n\n'));
+                                toast({ title: t('reviewDetection.copiedTitle'), description: t('reviewDetection.copiedDesc', { count: extractedReviews.length }) });
+                          } catch (e) {
+                                toast({ title: t('reviewDetection.copyFailedTitle'), description: t('reviewDetection.copyFailedDesc'), variant: 'destructive' });
+                          }
+                        }}
+                      >
+                            {t('reviewDetection.copyAll')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const blob = new Blob([extractedReviews.join('\n\n')], { type: 'text/plain' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = 'reviews.txt';
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          URL.revokeObjectURL(url);
+                              toast({ title: t('reviewDetection.downloadedTitle'), description: t('reviewDetection.downloadedDesc', { count: extractedReviews.length }) });
+                        }}
+                      >
+                            {t('reviewDetection.download')}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="mb-4 flex items-center gap-2">
+                      <label className="text-sm">{t('reviewDetection.summaryLanguageLabel')}</label>
+                      <select value={summaryLang} onChange={(e) => setSummaryLang(e.target.value)} className="border px-2 py-1 rounded">
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                      </select>
+                      <Button size="sm" onClick={() => summarizeReviews(summaryLang)}>{t('reviewDetection.summary')}</Button>
+                    </div>
+
+                    {summaryResult && (
+                      <div className="mb-4 p-4 bg-muted rounded">
+                        <div className="text-sm text-muted-foreground">{t('reviewDetection.detectedLanguage', { lang: summaryResult.languageDetected })}</div>
+                        <h4 className="font-medium mt-2">{t('reviewDetection.summary')}</h4>
+                        <p className="mt-1 whitespace-pre-wrap">{summaryResult.summary}</p>
+
+                        {summaryResult.pros?.length > 0 && (
+                          <div className="mt-3">
+            <h5 className="text-sm font-medium">{t('reviewDetection.topPros')}</h5>
+          <div className="flex gap-2 mt-1 flex-wrap">{summaryResult.pros.map((p) => <span key={p.term} className="px-2 py-1 bg-green-100 rounded text-sm">{p.term} ({p.count})</span>)}</div>
+                          </div>
+                        )}
+
+                        {summaryResult.cons?.length > 0 && (
+                          <div className="mt-3">
+                            <h5 className="text-sm font-medium">{t('reviewDetection.topCons')}</h5>
+                            <div className="flex gap-2 mt-1 flex-wrap">{summaryResult.cons.map((c) => <span key={c.term} className="px-2 py-1 bg-red-100 rounded text-sm">{c.term} ({c.count})</span>)}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                      {extractedReviews.map((r, i) => (
+                        <div key={i} className="p-3 bg-background/60 rounded">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1">
+                              <div className="text-sm text-muted-foreground">{t('reviewDetection.reviewLabel', { n: i + 1 })}</div>
+                              <div className="mt-1 text-sm whitespace-pre-wrap">{r}</div>
+                            </div>
+                            <div className="flex-shrink-0 ml-4">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(r);
+                                    toast({ title: t('reviewDetection.copiedTitle'), description: t('reviewDetection.copiedDesc', { count: i + 1 }) });
+                                  } catch (e) {
+                                    toast({ title: t('reviewDetection.copyFailedTitle'), description: t('reviewDetection.copyFailedDesc'), variant: 'destructive' });
+                                  }
+                                }}
+                              >
+                                {t('reviewDetection.copyAll')}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
           </CardContent>
         </Card>
       </div>

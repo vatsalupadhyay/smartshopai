@@ -3,21 +3,124 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+
+const CACHE_TTL_SECONDS = 300;
+const RATE_LIMIT_WINDOW = 3600;
+const RATE_LIMIT_MAX = 30;
+const MAX_FETCH_REVIEWS = 200;
+
+type CachePayload = { reviews?: string[]; logs?: string[] };
+
+const g = globalThis as any;
+g.__reviewCache = g.__reviewCache || new Map();
+g.__rateLimit = g.__rateLimit || new Map();
+
+const reviewCache = g.__reviewCache as Map<string, { ts: number; payload: CachePayload }>;
+const rateLimitMap = g.__rateLimit as Map<string, number[]>;
+
+function isRateLimited(clientIp: string) {
+  try {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW * 1000;
+    const arr = rateLimitMap.get(clientIp) || [];
+    const pruned = arr.filter((t) => t >= windowStart);
+    if (pruned.length >= RATE_LIMIT_MAX) {
+      rateLimitMap.set(clientIp, pruned);
+      return true;
+    }
+    pruned.push(now);
+    rateLimitMap.set(clientIp, pruned);
+    return false;
+  } catch (e) {
+    console.warn('Rate limit check failed:', String(e));
+    return false;
+  }
+}
+
+// HTML entity decoder
+function decodeHtml(html: string): string {
+  const entities: { [key: string]: string } = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'",
+    '&nbsp;': ' ',
+  };
+  return html.replace(/&[#\w]+;/g, (entity) => entities[entity] || entity);
+}
+
+// Extract text from HTML using regex
+function extractReviewsFromHtml(html: string, limit: number): string[] {
+  const reviews = new Set<string>();
+  
+  // Amazon review body pattern - looks for review text in specific HTML structure
+  // Pattern 1: data-hook="review-body"
+  const reviewBodyPattern = /data-hook=["']review-body["'][^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/gi;
+  let match;
+  
+  while ((match = reviewBodyPattern.exec(html)) !== null && reviews.size < limit) {
+    let text = match[1];
+    // Remove HTML tags
+    text = text.replace(/<[^>]+>/g, ' ');
+    // Decode HTML entities
+    text = decodeHtml(text);
+    // Clean up whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    
+    if (text.length > 30 && text.length < 1500) {
+      reviews.add(text);
+    }
+  }
+  
+  // Fallback: Look for longer text blocks that might be reviews
+  if (reviews.size < 5) {
+    const textBlockPattern = />([^<]{100,1200}?[.!?])\s*</g;
+    while ((match = textBlockPattern.exec(html)) !== null && reviews.size < limit) {
+      let text = match[1].trim();
+      text = decodeHtml(text);
+      text = text.replace(/\s+/g, ' ');
+      
+      // Filter out navigation, headers, etc.
+      const upperRatio = (text.match(/[A-Z]/g) || []).length / text.length;
+      const hasCommonWords = /\b(the|and|was|for|with|this|that)\b/i.test(text);
+      
+      if (upperRatio < 0.4 && hasCommonWords && !text.includes('href=') && text.length > 50) {
+        reviews.add(text);
+      }
+    }
+  }
+  
+  return Array.from(reviews);
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { 
+      status: 200,
+      headers: corsHeaders 
+    });
   }
 
   try {
-    const { url, reviews } = await req.json();
+    const clientIp = req.headers.get('x-forwarded-for') || 'unknown';
+    
+    if (isRateLimited(clientIp)) {
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded' }), 
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
+    }
 
-    console.log('Analyzing reviews for URL:', url);
+    const { url, reviews, limit = 20, page = 0 } = await req.json();
+    console.log('Analyzing reviews for:', url);
 
-    const SCRAPINGBEE_KEY = Deno.env.get('SCRAPINGBEE_API_KEY');
     const SCRAPEDO_TOKEN = Deno.env.get('SCRAPEDO_API_TOKEN');
-
     const logs: string[] = [];
     
     async function fetchReviewsFromUrl(pageUrl: string, limit = 20) {
@@ -25,174 +128,108 @@ Deno.serve(async (req) => {
         let html: string | null = null;
         let fetchMethod = 'none';
 
-        // If a Scrape.do token is provided, use it to render JS and fetch the page
         if (SCRAPEDO_TOKEN) {
           try {
-            const msg1 = '🔍 Scraping URL with scrape.do: ' + pageUrl;
-            logs.push(msg1);
-            console.log(msg1);
-            
-            const res = await fetch('https://api.scrape.do/', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: String(SCRAPEDO_TOKEN), 
-                url: pageUrl,
-                render_js: true,
-                wait: 3000
-              }),
+            const sbUrl = `https://api.scrape.do/?token=${encodeURIComponent(SCRAPEDO_TOKEN)}&url=${encodeURIComponent(pageUrl)}`;
+            console.log('Using scrape.do');
+            logs.push('🔍 Attempting scrape.do');
+            const res = await fetch(sbUrl, { 
+              method: 'GET',
+              headers: { 'Accept': 'text/html' }
             });
             if (res.ok) {
               html = await res.text();
               fetchMethod = 'scrape.do';
-              const msg2 = '✅ scrape.do fetch successful, HTML length: ' + html.length;
-              logs.push(msg2);
-              console.log(msg2);
-              const msg3 = '📄 HTML Preview (first 1000 chars): ' + html.substring(0, 1000);
-              logs.push(msg3);
-              console.log(msg3);
+              logs.push(`✅ scrape.do successful (${html.length} chars)`);
             } else {
-              const msg4 = '❌ scrape.do fetch failed, status: ' + res.status;
-              logs.push(msg4);
-              console.warn(msg4);
+              logs.push(`❌ scrape.do failed: ${res.status}`);
             }
           } catch (e) {
-            const msg5 = '❌ scrape.do request failed: ' + String(e);
-            logs.push(msg5);
-            console.warn(msg5);
+            logs.push('❌ scrape.do error: ' + String(e));
           }
         }
 
-        // Fallback to direct fetch
         if (!html) {
-          try {
-            const msg6 = '🔍 Falling back to direct fetch: ' + pageUrl;
-            logs.push(msg6);
-            console.log(msg6);
-            
-            const res = await fetch(pageUrl, { method: 'GET' });
-            if (!res.ok) {
-              const msg7 = '❌ Direct fetch failed, status: ' + res.status;
-              logs.push(msg7);
-              console.warn(msg7);
-              return { reviews: [], logs };
+          logs.push('🔍 Direct fetch: ' + pageUrl);
+          const res = await fetch(pageUrl, { 
+            method: 'GET',
+            headers: { 
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5',
             }
-            html = await res.text();
-            fetchMethod = 'direct';
-            const msg8 = '✅ Direct fetch successful, HTML length: ' + html.length;
-            logs.push(msg8);
-            console.log(msg8);
-          } catch (e) {
-            const msg9 = '❌ Direct fetch error: ' + String(e);
-            logs.push(msg9);
-            console.error(msg9);
+          });
+          if (!res.ok) {
+            logs.push(`❌ Direct fetch failed: ${res.status}`);
             return { reviews: [], logs };
           }
+          html = await res.text();
+          fetchMethod = 'direct';
+          logs.push(`✅ Direct fetch successful (${html.length} chars)`);
         }
 
-        // Parse using DOMParser
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        if (!doc) {
-          const msg10 = '❌ DOMParser failed';
-          logs.push(msg10);
-          console.error(msg10);
-          return { reviews: [], logs };
-        }
-
-        const found = new Set<string>();
-        const extractedReviews: string[] = [];
-
-        // For Amazon: look for spans inside review containers with data-hook="review"
-        const reviewContainers = doc.querySelectorAll('[data-hook="review"]');
-        const msg11 = '🔎 Found review containers with [data-hook="review"]: ' + reviewContainers.length;
-        logs.push(msg11);
-        console.log(msg11);
+        // Parse HTML using regex
+        logs.push('🔍 Parsing HTML for reviews...');
+        const extractedReviews = extractReviewsFromHtml(html, limit);
         
-        for (const container of Array.from(reviewContainers)) {
-          if (found.size >= limit) break;
-
-          // Look for the review body text specifically
-          const bodySpan = container.querySelector('[data-hook="review-body"] span');
-          if (bodySpan) {
-            let txt = bodySpan.textContent?.trim() || '';
-            txt = txt.replace(/\s+/g, ' ').slice(0, 1200);
-            
-            if (txt.length > 30) {
-              found.add(txt);
-              const reviewMsg = `📝 Review ${extractedReviews.length + 1}: ${txt.substring(0, 150)}...`;
-              logs.push(reviewMsg);
-              console.log(reviewMsg);
-              extractedReviews.push(txt);
-            }
-          }
-        }
-
-        const msg12 = `✅ Extracted ${found.size} reviews from primary selectors`;
-        logs.push(msg12);
-        console.log(msg12);
-
-        // Fallback: if few reviews found, use regex to extract longer text blocks
-        if (found.size < 5) {
-          const msg13 = '🔄 Falling back to regex extraction (found < 5 reviews)';
-          logs.push(msg13);
-          console.log(msg13);
-          
-          const regex = />\s*([a-zA-Z][^<>]{60,1200}?[.!?])\s*</g;
-          let match;
-          let regexCount = 0;
-          while ((match = regex.exec(html)) && found.size < limit) {
-            const txt = match[1].trim().replace(/\s+/g, ' ');
-            // Filter out likely non-review text (too much uppercase, numbers, etc.)
-            const upperRatio = (txt.match(/[A-Z]/g) || []).length / txt.length;
-            if (upperRatio < 0.4 && !txt.includes('href=') && txt.length > 30) {
-              found.add(txt);
-              regexCount++;
-              const regexMsg = `📝 Regex Review ${regexCount}: ${txt.substring(0, 150)}...`;
-              logs.push(regexMsg);
-              console.log(regexMsg);
-              extractedReviews.push(txt);
-            }
-          }
-          const msg14 = `✅ Regex extraction found ${regexCount} additional reviews`;
-          logs.push(msg14);
-          console.log(msg14);
-        }
-
-        const msg15 = `🎯 Total reviews extracted: ${found.size} (method: ${fetchMethod})`;
-        logs.push(msg15);
-        console.log(msg15);
+        logs.push(`✅ Extracted ${extractedReviews.length} reviews (${fetchMethod})`);
         
-        return { reviews: Array.from(found).slice(0, limit), logs };
+        if (extractedReviews.length > 0) {
+          logs.push(`📝 Sample: ${extractedReviews[0].substring(0, 100)}...`);
+        }
+        
+        return { reviews: extractedReviews, logs };
       } catch (e) {
-        const errMsg = 'Failed to fetch reviews from url: ' + String(e);
+        const errMsg = 'Failed to fetch: ' + String(e);
         logs.push(errMsg);
         console.error(errMsg);
         return { reviews: [], logs };
       }
     }
 
-    // If reviews are not provided, try scraping the URL
     let finalReviews: string[] = [];
     let scrapingLogs: string[] = [];
+
+    const pageNum = Math.max(0, Number(page) || 0);
+    const pageLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+    const cacheKey = url ? `${url}::f${MAX_FETCH_REVIEWS}` : null;
+
     if (reviews && Array.isArray(reviews) && reviews.length > 0) {
-      finalReviews = reviews.map(r => (typeof r === 'string' ? r : r.text || ''));
+      finalReviews = reviews.map((r) => (typeof r === 'string' ? r : r.text || ''));
+      scrapingLogs.push('Using provided reviews: ' + finalReviews.length);
     } else if (url) {
-      const result = await fetchReviewsFromUrl(url, 20);
-      finalReviews = result.reviews;
-      scrapingLogs = result.logs;
+      if (cacheKey && reviewCache.has(cacheKey)) {
+        const entry = reviewCache.get(cacheKey)!;
+        if (Date.now() - entry.ts < CACHE_TTL_SECONDS * 1000) {
+          scrapingLogs.push('🔁 Cache hit');
+          finalReviews = entry.payload.reviews || [];
+          scrapingLogs = scrapingLogs.concat(entry.payload.logs || []);
+        } else {
+          scrapingLogs.push('🧹 Cache expired');
+          reviewCache.delete(cacheKey);
+        }
+      }
+
+      if (finalReviews.length === 0) {
+        const result = await fetchReviewsFromUrl(url, MAX_FETCH_REVIEWS);
+        finalReviews = result.reviews;
+        scrapingLogs = scrapingLogs.concat(result.logs || []);
+
+        if (cacheKey && finalReviews.length > 0) {
+          reviewCache.set(cacheKey, { ts: Date.now(), payload: { reviews: finalReviews, logs: scrapingLogs } });
+          scrapingLogs.push(`💾 Cached ${finalReviews.length} reviews (TTL: ${CACHE_TTL_SECONDS}s)`);
+        }
+      }
     }
 
-    // Local heuristic-based analysis (fast, deterministic)
     function analyzeLocally(textReviews: string[]) {
-      const positiveWords = ['good','great','excellent','amazing','perfect','love','loved','best','fantastic','recommend','works','happy','satisfied'];
-      const negativeWords = ['bad','terrible','awful','worst','disappoint','poor','broken','hate','problem','doesn\'t work','not work','return'];
+      const positiveWords = ['good','great','excellent','amazing','perfect','love','loved','best','fantastic','recommend','works','happy','satisfied','wonderful','awesome'];
+      const negativeWords = ['bad','terrible','awful','worst','disappoint','poor','broken','hate','problem','doesn\'t work','not work','return','useless','waste'];
 
       const total = textReviews.length;
       let fakeCount = 0;
       let sentimentSum = 0;
       const detailed: string[] = [];
-
-      // simple similarity check map
       const seen = new Set<string>();
 
       for (let i = 0; i < textReviews.length; i++) {
@@ -200,38 +237,32 @@ Deno.serve(async (req) => {
         if (!r) continue;
         const lower = r.toLowerCase();
 
-        // sentiment score per review
         let pos = 0, neg = 0;
         for (const w of positiveWords) if (lower.includes(w)) pos++;
         for (const w of negativeWords) if (lower.includes(w)) neg++;
-        const reviewSentiment = Math.max(0, Math.min(100, 50 + (pos - neg) * 20));
+        const reviewSentiment = Math.max(0, Math.min(100, 50 + (pos - neg) * 15));
         sentimentSum += reviewSentiment;
 
-        // heuristics for fake reviews
         const suspiciousReasons: string[] = [];
-        if (r.length < 25) suspiciousReasons.push('very short review');
-        const exclam = (r.match(/!/g) || []).length;
-        if (exclam >= 3) suspiciousReasons.push('excessive exclamation');
-        if (/\b(best product ever|buy now|five stars|5 stars|best product|highly recommend)\b/i.test(r)) suspiciousReasons.push('promotional language');
-        if (/^[A-Z\s\W]{10,}$/.test(r) && r.length < 200) suspiciousReasons.push('all caps or unnatural casing');
-        if ((r.match(/\b(\w+)\b/g) || []).length > 200) suspiciousReasons.push('very long and repetitive');
-
-        // similarity / duplicate detection
+        if (r.length < 25) suspiciousReasons.push('very short');
+        if ((r.match(/!/g) || []).length >= 3) suspiciousReasons.push('excessive exclamation');
+        if (/\b(best product ever|buy now|five stars|click here|limited time)\b/i.test(r)) suspiciousReasons.push('promotional');
+        
         const key = r.replace(/\s+/g,' ').slice(0, 120);
-        if (seen.has(key)) suspiciousReasons.push('duplicate or repeated review');
+        if (seen.has(key)) suspiciousReasons.push('duplicate');
         seen.add(key);
 
-        if (suspiciousReasons.length > 0) {
+        if (suspiciousReasons.length >= 2) {
           fakeCount++;
-          detailed.push(`Review ${i+1}: flagged as fake - ${suspiciousReasons.join('; ')}. Preview: "${r.slice(0,120)}"`);
+          detailed.push(`Review ${i+1}: FAKE - ${suspiciousReasons.join(', ')}. "${r.slice(0,100)}..."`);
         } else {
-          detailed.push(`Review ${i+1}: looks genuine. Preview: "${r.slice(0,120)}"`);
+          detailed.push(`Review ${i+1}: GENUINE. "${r.slice(0,100)}..."`);
         }
       }
 
       const real = total - fakeCount;
       const fakePct = total > 0 ? Math.round((fakeCount / total) * 100) : 0;
-      const avgSent = total > 0 ? Math.round(sentimentSum / Math.max(1, total)) : 50;
+      const avgSent = total > 0 ? Math.round(sentimentSum / total) : 50;
       const overallSentiment = avgSent >= 60 ? 'positive' : avgSent <= 40 ? 'negative' : 'neutral';
 
       return {
@@ -241,40 +272,48 @@ Deno.serve(async (req) => {
         fakePercentage: fakePct,
         overallSentiment,
         sentimentScore: avgSent,
-        summary: `Found ${real} likely genuine reviews and ${fakeCount} likely fake reviews (${fakePct}%). Average sentiment: ${overallSentiment} (${avgSent}/100).`,
+        summary: `Analysis complete: ${real} genuine reviews, ${fakeCount} suspicious reviews (${fakePct}% fake). Overall sentiment: ${overallSentiment} (${avgSent}/100).`,
         detailedAnalysis: detailed.join('\n')
       };
     }
 
-    // If we have reviews from scraping or input, analyze locally and return
     if (finalReviews.length > 0) {
       const analysis = analyzeLocally(finalReviews);
-      console.log('📊 Final Analysis:', JSON.stringify(analysis, null, 2));
-      return new Response(JSON.stringify({ 
-        analysis, 
-        reviewsCount: finalReviews.length, 
-        reviews: finalReviews.slice(0, 10),
-        logs: scrapingLogs
+      const total = finalReviews.length;
+      const start = pageNum * pageLimit;
+      const paged = finalReviews.slice(start, start + pageLimit);
+
+      return new Response(JSON.stringify({
+        analysis,
+        reviewsCount: total,
+        page: pageNum,
+        limit: pageLimit,
+        reviews: paged,
+        logs: scrapingLogs,
       }), {
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Fallback: if no reviews found, respond with helpful message
-    return new Response(JSON.stringify({ analysis: {
-      totalReviews: 0,
-      realReviews: 0,
-      fakeReviews: 0,
-      fakePercentage: 0,
-      overallSentiment: 'neutral',
-      sentimentScore: 50,
-      summary: 'No reviews found on the provided URL and no reviews were supplied.',
-      detailedAnalysis: 'Ensure the product page has visible reviews. If reviews are loaded dynamically by JavaScript, consider providing the reviews array directly from the client or deploying a lightweight scraper that can execute JavaScript.'
-    },
-    logs: scrapingLogs
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ 
+      analysis: {
+        totalReviews: 0,
+        realReviews: 0,
+        fakeReviews: 0,
+        fakePercentage: 0,
+        overallSentiment: 'neutral',
+        sentimentScore: 50,
+        summary: 'No reviews found on this page. The page may not contain reviews, or they may be loaded dynamically with JavaScript.',
+        detailedAnalysis: 'Could not extract reviews from the provided URL. Try: 1) Using the Scrape.do API for JavaScript-heavy pages, 2) Providing a direct link to the reviews section, 3) Manually copying reviews into the analysis.'
+      },
+      logs: scrapingLogs
+    }), { 
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   } catch (error) {
-    console.error("Review analysis error:", error);
+    console.error("Error:", error);
     return new Response(JSON.stringify({ 
       error: error instanceof Error ? error.message : "Unknown error",
       details: "Failed to analyze reviews"
