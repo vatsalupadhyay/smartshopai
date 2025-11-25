@@ -1,13 +1,18 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
+  } as Record<string, string>;
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: getCorsHeaders(req) });
   }
 
   try {
@@ -16,7 +21,7 @@ Deno.serve(async (req) => {
     if (!Array.isArray(prices) || prices.length < 3) {
       return new Response(JSON.stringify({ error: 'Please provide at least 3 historical price points: [{ts, price}, ...]' }), {
         status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
     }
 
@@ -87,9 +92,9 @@ Deno.serve(async (req) => {
       trend,
       predictions: preds,
       inputCount: n,
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }), { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error('predict-price error:', error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'unknown' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'unknown' }), { status: 500, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
   }
 });

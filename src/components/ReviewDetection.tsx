@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, TrendingUp, AlertCircle } from "lucide-react";
+import { Shield, TrendingUp, AlertCircle, BarChart3, PieChart as PieChartIcon } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { DonutChart, PieChart } from "@/components/ui/simple-charts";
+import { DonutChart, PieChart, BarChart } from "@/components/ui/simple-charts";
 
 interface AnalysisResult {
   totalReviews: number;
@@ -26,6 +26,7 @@ export const ReviewDetection = () => {
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [scrapingLogs, setScrapingLogs] = useState<string[]>([]);
   const [extractedReviews, setExtractedReviews] = useState<string[]>([]);
+  const [chartType, setChartType] = useState<'pie' | 'bar' | 'donut'>('pie');
   const { toast } = useToast();
   const { t } = useTranslation();
   const [summaryLang, setSummaryLang] = useState<string>('en');
@@ -122,7 +123,7 @@ export const ReviewDetection = () => {
   };
 
   return (
-    <section className="py-24 px-4 md:px-6 bg-muted/30">
+    <section id="review-detection" className="py-24 px-4 md:px-6 bg-muted/30">
       <div className="container max-w-4xl">
         <div className="text-center space-y-4 mb-12">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mx-auto">
@@ -227,19 +228,126 @@ export const ReviewDetection = () => {
                   <CardContent className="space-y-4">
                     <p className="text-muted-foreground">{results.summary}</p>
                     <div className="p-4 bg-muted rounded-lg">
-                      <p className="text-sm whitespace-pre-wrap">
-                        {results.detailedAnalysis}
-                      </p>
+                      <div className="text-sm space-y-1">
+                        {results.detailedAnalysis.split('\n').map((line, idx) => {
+                          const isGenuine = line.includes('GENUINE');
+                          const isQuestionable = line.includes('QUESTIONABLE');
+                          const isSuspicious = line.includes('SUSPICIOUS');
+                          
+                          return (
+                            <div 
+                              key={idx} 
+                              className={`py-1 px-2 rounded ${
+                                isGenuine ? 'bg-green-50 text-green-800' : 
+                                isQuestionable ? 'bg-yellow-50 text-yellow-800' : 
+                                isSuspicious ? 'bg-red-50 text-red-800' : 
+                                ''
+                              }`}
+                            >
+                              {line}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                     {/* Charts: Real vs Fake */}
                     <div className="pt-4">
-                      <h4 className="text-sm font-medium mb-2">Distribution</h4>
-                      <div className="flex items-center gap-6">
-                        <div style={{ width: 220, height: 220 }}>
-                          <PieChart labels={[t("reviewDetection.realReviews"), t("reviewDetection.fakeReviews")]} values={[results.realReviews ?? 0, results.fakeReviews ?? 0]} colors={["#10b981", "#ef4444"]} />
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-sm font-medium">Distribution</h4>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant={chartType === 'pie' ? 'default' : 'outline'}
+                            onClick={() => setChartType('pie')}
+                          >
+                            <PieChartIcon className="w-4 h-4 mr-1" />
+                            Pie
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={chartType === 'bar' ? 'default' : 'outline'}
+                            onClick={() => setChartType('bar')}
+                          >
+                            <BarChart3 className="w-4 h-4 mr-1" />
+                            Bar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={chartType === 'donut' ? 'default' : 'outline'}
+                            onClick={() => setChartType('donut')}
+                          >
+                            <TrendingUp className="w-4 h-4 mr-1" />
+                            Donut
+                          </Button>
                         </div>
-                        <div className="ml-4" style={{ width: 120, height: 120 }}>
-                          <DonutChart percentage={results.fakePercentage ?? Math.round(((results.fakeReviews ?? 0) / Math.max(1, (results.realReviews ?? 0) + (results.fakeReviews ?? 0))) * 100)} color="#ef4444" label={t("reviewDetection.fakeReviews")} />
+                      </div>
+                      <div className="flex items-center justify-center gap-6">
+                        {chartType === 'pie' && (
+                          <div style={{ width: 280, height: 280 }}>
+                            <PieChart 
+                              labels={[t("reviewDetection.realReviews"), t("reviewDetection.fakeReviews")]} 
+                              values={[results.realReviews ?? 0, results.fakeReviews ?? 0]} 
+                              colors={["#10b981", "#ef4444"]} 
+                            />
+                          </div>
+                        )}
+                        {chartType === 'bar' && (
+                          <div>
+                            <div style={{ width: 400, height: 280 }}>
+                              <BarChart 
+                                labels={[t("reviewDetection.realReviews"), t("reviewDetection.fakeReviews")]} 
+                                values={[results.realReviews ?? 0, results.fakeReviews ?? 0]} 
+                                color="#3b82f6"
+                                label="Reviews"
+                              />
+                            </div>
+                            <div className="flex justify-around mt-2 text-sm text-muted-foreground">
+                              <span>Real: <strong className="text-green-600">{results.realReviews}</strong></span>
+                              <span>Fake: <strong className="text-red-600">{results.fakeReviews}</strong></span>
+                            </div>
+                          </div>
+                        )}
+                        {chartType === 'donut' && (
+                          <div>
+                            <div className="flex items-center gap-6">
+                              <div className="text-center">
+                                <div style={{ width: 200, height: 200 }}>
+                                  <DonutChart 
+                                    percentage={100 - (results.fakePercentage ?? 0)} 
+                                    color="#10b981" 
+                                    label={t("reviewDetection.realReviews")} 
+                                  />
+                                </div>
+                                <div className="mt-2 text-sm">
+                                  <strong className="text-green-600 text-xl">{results.realReviews}</strong>
+                                  <div className="text-muted-foreground">{t("reviewDetection.realReviews")}</div>
+                                </div>
+                              </div>
+                              <div className="text-center">
+                                <div style={{ width: 200, height: 200 }}>
+                                  <DonutChart 
+                                    percentage={results.fakePercentage ?? 0} 
+                                    color="#ef4444" 
+                                    label={t("reviewDetection.fakeReviews")} 
+                                  />
+                                </div>
+                                <div className="mt-2 text-sm">
+                                  <strong className="text-red-600 text-xl">{results.fakeReviews}</strong>
+                                  <div className="text-muted-foreground">{t("reviewDetection.fakeReviews")}</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-4 text-center">
+                        <div className="p-3 bg-green-50 rounded">
+                          <div className="text-2xl font-bold text-green-600">{results.realReviews}</div>
+                          <div className="text-sm text-green-700">{t("reviewDetection.realReviews")}</div>
+                        </div>
+                        <div className="p-3 bg-red-50 rounded">
+                          <div className="text-2xl font-bold text-red-600">{results.fakeReviews}</div>
+                          <div className="text-sm text-red-700">{t("reviewDetection.fakeReviews")} ({results.fakePercentage}%)</div>
                         </div>
                       </div>
                     </div>
@@ -317,13 +425,36 @@ export const ReviewDetection = () => {
                         <option value="de">German</option>
                       </select>
                       <Button size="sm" onClick={() => summarizeReviews(summaryLang)}>{t('reviewDetection.summary')}</Button>
+                      <span className="text-xs text-muted-foreground italic ml-2">
+                        ℹ️ AI-powered translation
+                      </span>
                     </div>
 
                     {summaryResult && (
                       <div className="mb-4 p-4 bg-muted rounded">
-                        <div className="text-sm text-muted-foreground">{t('reviewDetection.detectedLanguage', { lang: summaryResult.languageDetected })}</div>
-                        <h4 className="font-medium mt-2">{t('reviewDetection.summary')}</h4>
-                        <p className="mt-1 whitespace-pre-wrap">{summaryResult.summary}</p>
+                        <div className="text-sm text-muted-foreground mb-2">
+                          {t('reviewDetection.detectedLanguage', { lang: summaryResult.languageDetected })}
+                          {summaryResult.translatedSummary && ' → Translated to ' + summaryLang.toUpperCase()}
+                        </div>
+                        
+                        {summaryResult.translatedSummary ? (
+                          <>
+                            <h4 className="font-medium mt-2">Translated Summary ({summaryLang.toUpperCase()})</h4>
+                            <p className="mt-1 whitespace-pre-wrap bg-blue-50 p-3 rounded border border-blue-200">{summaryResult.translatedSummary}</p>
+                            
+                            <details className="mt-3">
+                              <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                                Show original summary
+                              </summary>
+                              <p className="mt-2 whitespace-pre-wrap text-sm">{summaryResult.summary}</p>
+                            </details>
+                          </>
+                        ) : (
+                          <>
+                            <h4 className="font-medium mt-2">{t('reviewDetection.summary')}</h4>
+                            <p className="mt-1 whitespace-pre-wrap">{summaryResult.summary}</p>
+                          </>
+                        )}
 
                         {summaryResult.pros?.length > 0 && (
                           <div className="mt-3">

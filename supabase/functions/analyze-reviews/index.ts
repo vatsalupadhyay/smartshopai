@@ -1,10 +1,14 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
+  } as Record<string, string>;
+}
 
 const CACHE_TTL_SECONDS = 300;
 const RATE_LIMIT_WINDOW = 3600;
@@ -47,9 +51,11 @@ function decodeHtml(html: string): string {
     '&gt;': '>',
     '&quot;': '"',
     '&#39;': "'",
+    '&#x27;': "'",
     '&nbsp;': ' ',
+    '&#x2F;': '/',
   };
-  return html.replace(/&[#\w]+;/g, (entity) => entities[entity] || entity);
+  return html.replace(/&(?:#x?)?[\w\d]+;/g, (entity) => entities[entity] || entity);
 }
 
 // Extract text from HTML using regex
@@ -98,10 +104,7 @@ function extractReviewsFromHtml(html: string, limit: number): string[] {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { 
-      status: 200,
-      headers: corsHeaders 
-    });
+    return new Response(null, { status: 204, headers: getCorsHeaders(req) });
   }
 
   try {
@@ -112,7 +115,7 @@ Deno.serve(async (req) => {
         JSON.stringify({ error: 'Rate limit exceeded' }), 
         { 
           status: 429, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } 
         }
       );
     }
@@ -171,6 +174,158 @@ Deno.serve(async (req) => {
         // Parse HTML using regex
         logs.push('🔍 Parsing HTML for reviews...');
         const extractedReviews = extractReviewsFromHtml(html, limit);
+
+        // Extract product metadata using regex patterns (DOMParser not available in Deno edge runtime)
+        logs.push('🔍 Parsing HTML for product metadata...');
+        let productTitle: string | null = null;
+        let productDescription: string | null = null;
+        let productImage: string | null = null;
+        let productPrice: string | null = null;
+
+        try {
+          // Title extraction
+          const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+          productTitle = ogTitle?.[1] ? decodeHtml(ogTitle[1].trim()) : null;
+          
+          if (!productTitle) {
+            const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            productTitle = titleTag?.[1] ? decodeHtml(titleTag[1].trim()) : null;
+          }
+          
+          if (!productTitle) {
+            const h1Match = html.match(/<h1[^>]*id=["']productTitle["'][^>]*>([\s\S]*?)<\/h1>/i);
+            if (h1Match?.[1]) {
+              productTitle = decodeHtml(h1Match[1].replace(/<[^>]+>/g, '').trim());
+            }
+          }
+
+          if (!productTitle) {
+            const spanTitle = html.match(/<span[^>]*id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i);
+            if (spanTitle?.[1]) {
+              productTitle = decodeHtml(spanTitle[1].replace(/<[^>]+>/g, '').trim());
+            }
+          }
+
+          // Description extraction
+          const ogDesc = html.match(/<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+          productDescription = ogDesc?.[1] ? decodeHtml(ogDesc[1].trim()) : null;
+          
+          if (!productDescription) {
+            const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+            productDescription = metaDesc?.[1] ? decodeHtml(metaDesc[1].trim()) : null;
+          }
+
+          // Feature bullets (common on Amazon)
+          if (!productDescription) {
+            const bullets = html.match(/<div[^>]*id=["']feature-bullets["'][^>]*>([\s\S]*?)<\/div>/i);
+            if (bullets?.[1]) {
+              let desc = bullets[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (desc.length > 50) productDescription = desc.substring(0, 500);
+            }
+          }
+
+          // Product description section
+          if (!productDescription) {
+            const prodDesc = html.match(/<div[^>]*id=["']productDescription["'][^>]*>([\s\S]*?)<\/div>/i);
+            if (prodDesc?.[1]) {
+              let desc = prodDesc[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (desc.length > 50) productDescription = desc.substring(0, 500);
+            }
+          }
+
+          // Image extraction
+          const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+          productImage = ogImage?.[1]?.trim() || null;
+
+          if (!productImage) {
+            const dataHires = html.match(/data-old-hires=["']([^"']+)["']/i);
+            productImage = dataHires?.[1] || null;
+          }
+
+          // Price extraction - try multiple selectors
+          logs.push('🔍 Attempting price extraction...');
+          
+          const priceMeta = html.match(/<meta[^>]+property=["']product:price:amount["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+          if (priceMeta?.[1]) {
+            productPrice = priceMeta[1].trim();
+            logs.push(`💰 Found price (meta tag): ${productPrice}`);
+          }
+
+          if (!productPrice) {
+            const priceItemprop = html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+            if (priceItemprop?.[1]) {
+              productPrice = priceItemprop[1].trim();
+              logs.push(`💰 Found price (itemprop): ${productPrice}`);
+            }
+          }
+
+          if (!productPrice) {
+            const priceBlock = html.match(/<span[^>]*id=["'](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["'][^>]*>([\s\S]*?)<\/span>/i);
+            if (priceBlock?.[1]) {
+              productPrice = priceBlock[1].replace(/<[^>]+>/g, '').trim();
+              logs.push(`💰 Found price (priceblock): ${productPrice}`);
+            }
+          }
+
+          // Additional Amazon price selectors
+          if (!productPrice) {
+            const corePriceDisplay = html.match(/<span[^>]*class=["'][^"']*a-price-whole[^"']*["'][^>]*>([^<]+)<\/span>/i);
+            if (corePriceDisplay?.[1]) {
+              const wholePart = corePriceDisplay[1].trim();
+              const fractionMatch = html.match(/<span[^>]*class=["'][^"']*a-price-fraction[^"']*["'][^>]*>([^<]+)<\/span>/i);
+              const fraction = fractionMatch?.[1]?.trim() || '00';
+              productPrice = `${wholePart}.${fraction}`;
+              logs.push(`💰 Found price (a-price-whole): ${productPrice}`);
+            }
+          }
+
+          if (!productPrice) {
+            const apexPrice = html.match(/<span[^>]*class=["'][^"']*apexPriceToPay[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+            if (apexPrice?.[1]) {
+              productPrice = apexPrice[1].replace(/<[^>]+>/g, '').trim();
+              logs.push(`💰 Found price (apexPriceToPay): ${productPrice}`);
+            }
+          }
+
+          if (!productPrice) {
+            const offerPrice = html.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([0-9,.]+)<\/span>/i);
+            if (offerPrice?.[1]) {
+              productPrice = offerPrice[1].trim();
+              logs.push(`💰 Found price (a-offscreen): ${productPrice}`);
+            }
+          }
+
+          if (!productPrice) {
+            logs.push('❌ No price found with any selector');
+          }
+
+          // JSON-LD parsing
+          const ldRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+          let ldMatch;
+          while ((ldMatch = ldRegex.exec(html)) !== null) {
+            try {
+              const json = JSON.parse(ldMatch[1]);
+              const objs = Array.isArray(json) ? json : [json];
+              for (const obj of objs) {
+                const type = obj['@type'];
+                if (type === 'Product') {
+                  productTitle = productTitle || obj.name || null;
+                  productDescription = productDescription || obj.description || null;
+                  productImage = productImage || (Array.isArray(obj.image) ? obj.image[0] : obj.image) || null;
+                  if (obj.offers) {
+                    productPrice = productPrice || obj.offers.price || obj.offers.lowPrice || null;
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore JSON parse errors
+            }
+          }
+
+          logs.push(`📦 Extracted metadata: Title=${productTitle ? 'YES' : 'NO'}, Desc=${productDescription ? 'YES' : 'NO'}, Price=${productPrice ? 'YES' : 'NO'}, Image=${productImage ? 'YES' : 'NO'}`);
+        } catch (e) {
+          logs.push('❌ Metadata extraction error: ' + String(e));
+        }
         
         logs.push(`✅ Extracted ${extractedReviews.length} reviews (${fetchMethod})`);
         
@@ -178,7 +333,7 @@ Deno.serve(async (req) => {
           logs.push(`📝 Sample: ${extractedReviews[0].substring(0, 100)}...`);
         }
         
-        return { reviews: extractedReviews, logs };
+        return { reviews: extractedReviews, logs, productTitle, productDescription, productImage, productPrice };
       } catch (e) {
         const errMsg = 'Failed to fetch: ' + String(e);
         logs.push(errMsg);
@@ -189,6 +344,7 @@ Deno.serve(async (req) => {
 
     let finalReviews: string[] = [];
     let scrapingLogs: string[] = [];
+    let scrapeMeta: { title?: string | null; description?: string | null; image?: string | null; price?: string | null } | null = null;
 
     const pageNum = Math.max(0, Number(page) || 0);
     const pageLimit = Math.max(1, Math.min(100, Number(limit) || 20));
@@ -214,6 +370,12 @@ Deno.serve(async (req) => {
         const result = await fetchReviewsFromUrl(url, MAX_FETCH_REVIEWS);
         finalReviews = result.reviews;
         scrapingLogs = scrapingLogs.concat(result.logs || []);
+        scrapeMeta = {
+          title: result.productTitle ?? null,
+          description: result.productDescription ?? null,
+          image: result.productImage ?? null,
+          price: result.productPrice ?? null,
+        };
 
         if (cacheKey && finalReviews.length > 0) {
           reviewCache.set(cacheKey, { ts: Date.now(), payload: { reviews: finalReviews, logs: scrapingLogs } });
@@ -244,17 +406,24 @@ Deno.serve(async (req) => {
         sentimentSum += reviewSentiment;
 
         const suspiciousReasons: string[] = [];
-        if (r.length < 25) suspiciousReasons.push('very short');
-        if ((r.match(/!/g) || []).length >= 3) suspiciousReasons.push('excessive exclamation');
-        if (/\b(best product ever|buy now|five stars|click here|limited time)\b/i.test(r)) suspiciousReasons.push('promotional');
+        if (r.length < 25) suspiciousReasons.push('very short'); // Stricter: 25 chars instead of 20
+        if ((r.match(/!/g) || []).length >= 3) suspiciousReasons.push('excessive exclamation'); // Stricter: 3+ instead of 4+
+        if (/\b(best product ever|buy now|five stars?|click here|limited time|must buy|amazing deal|don't miss|highly recommend)\b/i.test(r)) suspiciousReasons.push('promotional language');
+        if (/^[A-Z\s!]{15,}$/.test(r)) suspiciousReasons.push('all caps');
+        if (pos >= 3 && neg === 0 && r.length < 60) suspiciousReasons.push('overly positive + short'); // Stricter
+        if (/\b(perfect|flawless|incredible|outstanding|amazing|awesome)\b/i.test(r) && r.length < 50) suspiciousReasons.push('generic praise'); // More words
+        if (r.split(/\s+/).length < 10) suspiciousReasons.push('too few words'); // New check
         
         const key = r.replace(/\s+/g,' ').slice(0, 120);
         if (seen.has(key)) suspiciousReasons.push('duplicate');
         seen.add(key);
 
+        // Mark as fake if 2+ red flags, questionable if 1 flag
         if (suspiciousReasons.length >= 2) {
           fakeCount++;
-          detailed.push(`Review ${i+1}: FAKE - ${suspiciousReasons.join(', ')}. "${r.slice(0,100)}..."`);
+          detailed.push(`Review ${i+1}: SUSPICIOUS - ${suspiciousReasons.join(', ')}. "${r.slice(0,100)}..."`);
+        } else if (suspiciousReasons.length === 1) {
+          detailed.push(`Review ${i+1}: QUESTIONABLE (${suspiciousReasons[0]}). "${r.slice(0,100)}..."`);
         } else {
           detailed.push(`Review ${i+1}: GENUINE. "${r.slice(0,100)}..."`);
         }
@@ -290,9 +459,14 @@ Deno.serve(async (req) => {
         limit: pageLimit,
         reviews: paged,
         logs: scrapingLogs,
+        // product metadata (if available from the fetch step)
+        productTitle: scrapeMeta?.title ?? null,
+        productDescription: scrapeMeta?.description ?? null,
+        productImage: scrapeMeta?.image ?? null,
+        productPrice: scrapeMeta?.price ?? null,
       }), {
         status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
     }
 
@@ -307,10 +481,14 @@ Deno.serve(async (req) => {
         summary: 'No reviews found on this page. The page may not contain reviews, or they may be loaded dynamically with JavaScript.',
         detailedAnalysis: 'Could not extract reviews from the provided URL. Try: 1) Using the Scrape.do API for JavaScript-heavy pages, 2) Providing a direct link to the reviews section, 3) Manually copying reviews into the analysis.'
       },
-      logs: scrapingLogs
+      logs: scrapingLogs,
+      productTitle: scrapeMeta?.title ?? null,
+      productDescription: scrapeMeta?.description ?? null,
+      productImage: scrapeMeta?.image ?? null,
+      productPrice: scrapeMeta?.price ?? null,
     }), { 
       status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } 
     });
   } catch (error) {
     console.error("Error:", error);
@@ -319,7 +497,7 @@ Deno.serve(async (req) => {
       details: "Failed to analyze reviews"
     }), {
       status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
     });
   }
 });

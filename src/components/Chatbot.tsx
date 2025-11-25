@@ -12,6 +12,15 @@ interface Message {
   content: string;
 }
 
+interface ScrapedProduct {
+  productTitle?: string;
+  productPrice?: string;
+  productDescription?: string;
+  productImage?: string;
+  reviews?: string[];
+  logs?: string[];
+}
+
 export const Chatbot = () => {
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
@@ -35,6 +44,7 @@ export const Chatbot = () => {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [productUrl, setProductUrl] = useState<string | undefined>(undefined);
+  const [scrapedData, setScrapedData] = useState<ScrapedProduct | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,7 +62,26 @@ export const Chatbot = () => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: "user", content: input };
-    setMessages(prev => [...prev, userMessage]);
+    
+    // Detect if user is providing a new product URL
+    const urlMatch = input.match(/https?:\/\/[^\s]+/);
+    const newProductUrl = urlMatch ? urlMatch[0] : undefined;
+    
+    // If new product URL detected and it's different from current, clear conversation
+    if (newProductUrl && newProductUrl !== productUrl) {
+      console.log('🔄 New product URL detected, clearing conversation history');
+      setMessages([
+        {
+          role: "assistant",
+          content: t("chatbot.initialMessage", "Hello! I'm your SmartShop AI assistant. I can help you compare products, analyze reviews, and find the best deals. What are you looking for today?"),
+        },
+        userMessage
+      ]);
+      setProductUrl(newProductUrl);
+    } else {
+      setMessages(prev => [...prev, userMessage]);
+    }
+    
     setInput("");
     setIsLoading(true);
 
@@ -69,18 +98,130 @@ export const Chatbot = () => {
         return;
       }
       type OutgoingMessage = { role: 'system' | 'user' | 'assistant'; content: string };
-      const payloadMessages: OutgoingMessage[] = [...messages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: userMessage.content }];
-      // if product URL is attached, add it as a system message context before user messages
-      if (productUrl) {
-        payloadMessages.unshift({ role: 'system', content: `Product URL: ${productUrl}` });
+      // Build messages array from conversation history (don't include current userMessage yet)
+      const payloadMessages: OutgoingMessage[] = [...messages.map(m => ({ role: m.role, content: m.content }))];
+      
+      // Only scrape if this is a NEW product URL (not a follow-up question)
+      if (newProductUrl) {
+        console.log('🔗 Scraping NEW product URL:', newProductUrl);
+        try {
+          const scrapeRes = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-reviews`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            },
+            body: JSON.stringify({ url: newProductUrl, limit: 5 }),
+          });
+          if (scrapeRes.ok) {
+            const scrapeData = await scrapeRes.json().catch(() => ({}));
+            console.log('📦 Scraped product data:', scrapeData);
+            setScrapedData(scrapeData); // Store for follow-up questions
+            
+            const metaParts: string[] = [];
+            if (scrapeData.productTitle) metaParts.push(`Title: ${scrapeData.productTitle}`);
+            if (scrapeData.productPrice) metaParts.push(`Price: ${scrapeData.productPrice}`);
+            if (scrapeData.productDescription) metaParts.push(`Description: ${scrapeData.productDescription}`);
+            if (scrapeData.reviews && Array.isArray(scrapeData.reviews) && scrapeData.reviews.length > 0) {
+              metaParts.push(`Sample review: ${scrapeData.reviews[0].slice(0, 240)}`);
+            }
+            
+            console.log('📋 Metadata parts to send:', metaParts);
+            
+            if (metaParts.length > 0) {
+              // Add strong system message FIRST
+              payloadMessages.push({
+                role: 'system',
+                content: `CRITICAL INSTRUCTION - READ CAREFULLY:
+You MUST describe ONLY the product in the VERIFIED PRODUCT DATA section below.
+DO NOT use your training knowledge about other products.
+DO NOT substitute or mention different products.
+If the title says "Polo Shirt", describe ONLY that polo shirt.
+If it says "Earbuds", describe ONLY those earbuds.
+The user has explicitly provided this product URL and expects information about THIS SPECIFIC PRODUCT.`
+              });
+              
+              // Add user message with scraped data (this replaces the original user message)
+              payloadMessages.push({
+                role: 'user',
+                content: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 VERIFIED PRODUCT DATA (scraped from ${newProductUrl})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${metaParts.join('\n')}
+${scrapeData.productImage ? `\nProduct Image: ${scrapeData.productImage}` : ''}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Based on the verified data above, please describe THIS product with:
+**Product Overview:**
+**Key Features:**
+**Specifications:**
+
+Additional context: ${userMessage.content}`
+              });
+              
+              console.log('✅ Sending messages to LLM:', JSON.stringify(payloadMessages, null, 2));
+            } else {
+              payloadMessages.push({
+                role: 'user',
+                content: `I couldn't scrape product details from ${newProductUrl}. Please provide more information or try a different URL.\n\nUser question: ${userMessage.content}`
+              });
+            }
+
+            // surface scraping logs to console (and optionally to UI via toast)
+            if (scrapeData.logs && Array.isArray(scrapeData.logs) && scrapeData.logs.length > 0) {
+              const logSnippet = scrapeData.logs.slice(0, 5).join('\n');
+              console.log('Scrape logs:', logSnippet);
+              // Optionally toast the logs
+              toast({ title: 'Scraping Logs', description: logSnippet, duration: 5000 });
+            }
+          } else {
+            payloadMessages.push({ role: 'user', content: `Product URL provided but scraping failed: ${newProductUrl}. User question: ${userMessage.content}` });
+          }
+        } catch (e) {
+          console.warn('Scrape failed, continuing to chat:', e);
+          payloadMessages.push({ role: 'user', content: `Product URL provided but scraping failed: ${newProductUrl}. User question: ${userMessage.content}` });
+        }
+      } else if (scrapedData && productUrl) {
+        // Follow-up question about existing product - use cached scraped data
+        console.log('💬 Follow-up question about:', productUrl);
+        const metaParts: string[] = [];
+        if (scrapedData.productTitle) metaParts.push(`Title: ${scrapedData.productTitle}`);
+        if (scrapedData.productPrice) metaParts.push(`Price: ${scrapedData.productPrice}`);
+        if (scrapedData.productDescription) metaParts.push(`Description: ${scrapedData.productDescription}`);
+        
+        if (metaParts.length > 0) {
+          payloadMessages.push({
+            role: 'system',
+            content: `Context: The user is asking a follow-up question about this product:
+${metaParts.join('\n')}
+${scrapedData.productImage ? `Image: ${scrapedData.productImage}` : ''}
+
+Answer their question based on this product context.`
+          });
+        }
+        payloadMessages.push({ role: 'user', content: userMessage.content });
+      } else {
+        // No product URL - just add the user message
+        payloadMessages.push({ role: 'user', content: userMessage.content });
       }
 
       const targetLang = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0];
+      const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
+      if (!publishableKey) {
+        const msg = 'Missing Supabase publishable/anon key. Set VITE_SUPABASE_PUBLISHABLE_KEY or VITE_SUPABASE_ANON_KEY.';
+        console.error(msg);
+        toast({ title: t('common.error'), description: msg, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch(CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          Authorization: `Bearer ${publishableKey}`,
         },
         body: JSON.stringify({ messages: payloadMessages, targetLang }),
       });
@@ -253,6 +394,7 @@ export const Chatbot = () => {
     ];
     setMessages(initial);
     setProductUrl(undefined);
+    setScrapedData(null);
     try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
   };
 
@@ -311,7 +453,22 @@ export const Chatbot = () => {
                         ? "bg-muted"
                         : "bg-primary text-primary-foreground"
                     }`}>
-                      <p className="text-sm leading-relaxed">{message.content}</p>
+                      {/* Show product image if this is the first assistant message after scraping */}
+                      {message.role === "assistant" && index === 1 && scrapedData?.productImage && (
+                        <img 
+                          src={scrapedData.productImage} 
+                          alt={scrapedData.productTitle || 'Product'}
+                          className="max-w-xs rounded-lg mb-3 border border-border"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      )}
+                      <div className="text-sm leading-relaxed whitespace-pre-wrap" dangerouslySetInnerHTML={{ 
+                        __html: message.content
+                          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                          .replace(/^- (.+)$/gm, '<li>$1</li>')
+                          .replace(/(<li>.*<\/li>\n?)+/g, '<ul class="list-disc pl-4 my-2">$&</ul>')
+                          .replace(/\n\n/g, '<br/><br/>')
+                      }} />
                     </div>
                   </div>
                 ))}

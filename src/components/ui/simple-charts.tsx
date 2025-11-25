@@ -1,7 +1,7 @@
-import { Doughnut, Pie } from 'react-chartjs-2';
-import { Chart, ArcElement, Tooltip, Legend, ChartOptions } from 'chart.js';
+import { Doughnut, Pie, Bar } from 'react-chartjs-2';
+import { Chart, ArcElement, Tooltip, Legend, ChartOptions, CategoryScale, LinearScale, BarElement } from 'chart.js';
 
-Chart.register(ArcElement, Tooltip, Legend);
+Chart.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 // Global styling tweaks
 Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial';
@@ -88,5 +88,50 @@ export const PieChart: React.FC<PieProps> = ({ labels, values, colors }) => {
   return <Pie data={data} options={options} />;
 };
 
-export default { DonutChart, PieChart };
+type BarProps = {
+  labels: string[];
+  values: number[];
+  color?: string;
+  label?: string;
+};
+
+export const BarChart: React.FC<BarProps> = ({ labels, values, color = '#3b82f6', label = 'Count' }) => {
+  const data = {
+    labels,
+    datasets: [
+      {
+        label,
+        data: values,
+        backgroundColor: color,
+        borderWidth: 0,
+        borderRadius: 4,
+      },
+    ],
+  };
+
+  const options: ChartOptions<'bar'> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        enabled: true,
+        callbacks: {
+          label: (context) => {
+            const value = context.raw as number;
+            return `${context.dataset.label}: ${value}`;
+          }
+        }
+      }
+    },
+    scales: {
+      y: { beginAtZero: true, ticks: { precision: 0 } },
+      x: { grid: { display: false } }
+    }
+  };
+
+  return <Bar data={data} options={options} />;
+};
+
+export default { DonutChart, PieChart, BarChart };
 

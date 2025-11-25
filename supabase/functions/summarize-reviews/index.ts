@@ -1,9 +1,14 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
+  } as Record<string, string>;
+}
 
 function detectLanguage(sample: string) {
   // Very small heuristic: check for presence of common Spanish/French/German words, otherwise default to 'en'
@@ -127,12 +132,12 @@ function extractProsCons(reviews: string[]) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: getCorsHeaders(req) });
 
   try {
     const { reviews, targetLang } = await req.json();
     if (!Array.isArray(reviews) || reviews.length === 0) {
-      return new Response(JSON.stringify({ error: 'reviews array required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: 'reviews array required' }), { status: 400, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
     }
 
     const sample = reviews.slice(0, 3).join(' ');
@@ -140,8 +145,55 @@ Deno.serve(async (req) => {
     const summary = extractiveSummary(reviews, 3);
     const { pros, cons } = extractProsCons(reviews);
 
-    // Note: translation to targetLang is not available in this offline function.
-    const translated = (targetLang && targetLang !== detected) ? null : summary;
+    // Translate summary if targetLang is different from detected language
+    let translated = null;
+    if (targetLang && targetLang !== detected && summary) {
+      const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY');
+      if (GROQ_API_KEY) {
+        try {
+          const langNames: Record<string, string> = {
+            'en': 'English',
+            'es': 'Spanish',
+            'fr': 'French',
+            'de': 'German'
+          };
+          
+          const targetLangName = langNames[targetLang] || targetLang;
+          
+          const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${GROQ_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [
+                {
+                  role: 'system',
+                  content: `You are a professional translator. Translate the following product review summary to ${targetLangName}. Preserve the meaning and tone. Only return the translation, nothing else.`
+                },
+                {
+                  role: 'user',
+                  content: summary
+                }
+              ],
+              temperature: 0.3,
+              max_tokens: 500,
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            translated = data.choices?.[0]?.message?.content?.trim() || null;
+          }
+        } catch (e) {
+          console.warn('Translation failed:', e);
+          // Fall back to original summary if translation fails
+          translated = null;
+        }
+      }
+    }
 
     return new Response(JSON.stringify({
       languageDetected: detected,
@@ -150,9 +202,9 @@ Deno.serve(async (req) => {
       pros,
       cons,
       inputCount: reviews.length,
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }), { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error('summarize-reviews error:', error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'unknown' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'unknown' }), { status: 500, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
   }
 });

@@ -2,6 +2,7 @@ import { Navigation } from "@/components/Navigation";
 import { Hero } from "@/components/Hero";
 import { Features } from "@/components/Features";
 import { Dashboard } from "@/components/Dashboard";
+import { PricePrediction } from "@/components/PricePrediction";
 import { Chatbot } from "@/components/Chatbot";
 import { ReviewDetection } from "@/components/ReviewDetection";
 import { Footer } from "@/components/Footer";
@@ -17,6 +18,9 @@ const Index = () => {
         </div>
         <div id="dashboard">
           <Dashboard />
+        </div>
+        <div id="price-prediction">
+          <PricePrediction />
         </div>
         <ReviewDetection />
         <div id="assistant">
