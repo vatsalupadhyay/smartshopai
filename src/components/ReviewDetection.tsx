@@ -227,20 +227,31 @@ export const ReviewDetection = () => {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <p className="text-muted-foreground">{results.summary}</p>
+                    
+                    {/* Legend for review classifications */}
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded bg-green-100 border border-green-300"></div>
+                        <span className="text-green-800 font-medium">GENUINE</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded bg-red-100 border border-red-300"></div>
+                        <span className="text-red-800 font-medium">FAKE</span>
+                      </div>
+                    </div>
+                    
                     <div className="p-4 bg-muted rounded-lg">
                       <div className="text-sm space-y-1">
                         {results.detailedAnalysis.split('\n').map((line, idx) => {
                           const isGenuine = line.includes('GENUINE');
-                          const isQuestionable = line.includes('QUESTIONABLE');
-                          const isSuspicious = line.includes('SUSPICIOUS');
+                          const isFake = line.includes('FAKE');
                           
                           return (
                             <div 
                               key={idx} 
                               className={`py-1 px-2 rounded ${
-                                isGenuine ? 'bg-green-50 text-green-800' : 
-                                isQuestionable ? 'bg-yellow-50 text-yellow-800' : 
-                                isSuspicious ? 'bg-red-50 text-red-800' : 
+                                isGenuine ? 'bg-green-50 text-green-800 border border-green-200' : 
+                                isFake ? 'bg-red-50 text-red-800 border border-red-200' : 
                                 ''
                               }`}
                             >

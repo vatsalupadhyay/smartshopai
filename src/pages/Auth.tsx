@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signInWithRedirect, signInWithPopup, getRedirectResult } from "firebase/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { ShoppingBag, LogIn } from "lucide-react";
 import { firebaseAuth, firebaseGoogleProvider } from "@/integrations/firebase/client";
-import { signInWithPopup } from "firebase/auth";
 
 export default function Auth() {
   const [isLogin, setIsLogin] = useState(true);
@@ -23,13 +22,42 @@ export default function Auth() {
   const { t } = useTranslation();
 
   useEffect(() => {
+    // Check for redirect result from Google Sign-In
+    getRedirectResult(firebaseAuth)
+      .then((result) => {
+        if (result?.user) {
+          console.log('✅ Google Sign-In Success:', result.user.email);
+          toast({ title: t("auth.loginSuccess"), duration: 3000 });
+          navigate('/');
+        }
+      })
+      .catch((error) => {
+        if (error.code !== 'auth/popup-closed-by-user') {
+          console.error('❌ Google Sign-In Error:', error.code, error.message);
+          
+          // Provide specific error messages
+          let errorMsg = error.message;
+          if (error.code === 'auth/unauthorized-domain') {
+            errorMsg = 'This domain is not authorized. Add it in Firebase Console → Authentication → Settings → Authorized domains';
+          } else if (error.code === 'auth/operation-not-allowed') {
+            errorMsg = 'Google Sign-In is not enabled. Enable it in Firebase Console → Authentication → Sign-in method';
+          }
+          
+          toast({ 
+            title: t("auth.error"), 
+            description: errorMsg, 
+            variant: 'destructive', 
+            duration: 7000 
+          });
+        }
+      });
+
     // Check if user is already logged in
-    // Check Firebase auth state instead of Supabase for email/password
     const unsub = firebaseAuth.onAuthStateChanged((u) => {
       if (u) navigate('/');
     });
     return () => unsub();
-  }, [navigate]);
+  }, [navigate, t, toast]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,8 +83,26 @@ export default function Auth() {
           navigate('/');
         }
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+    } catch (error: any) {
+      let message = error.message || String(error);
+      
+      // Provide user-friendly error messages
+      if (error.code === 'auth/invalid-email') {
+        message = 'Invalid email address format.';
+      } else if (error.code === 'auth/user-disabled') {
+        message = 'This account has been disabled.';
+      } else if (error.code === 'auth/user-not-found') {
+        message = 'No account found with this email.';
+      } else if (error.code === 'auth/wrong-password') {
+        message = 'Incorrect password.';
+      } else if (error.code === 'auth/email-already-in-use') {
+        message = 'An account with this email already exists.';
+      } else if (error.code === 'auth/weak-password') {
+        message = 'Password should be at least 6 characters.';
+      } else if (error.code === 'auth/invalid-credential') {
+        message = 'Invalid email or password.';
+      }
+      
       toast({
         title: t("auth.error"),
         description: message,
@@ -142,19 +188,56 @@ export default function Auth() {
               <span className="text-sm text-muted-foreground">OR</span>
             </div>
             <Button
+              type="button"
               className="w-full flex items-center justify-center gap-2"
               variant="outline"
+              disabled={loading}
               onClick={async () => {
                 try {
                   setLoading(true);
-                  const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
-                  // result.user contains Firebase user; you can also create/verify user in Supabase if needed
-                  toast({ title: t("auth.loginSuccess"), duration: 3000 });
-                  navigate('/');
-                } catch (err) {
-                  const message = err instanceof Error ? err.message : String(err);
-                  toast({ title: t("auth.error"), description: message, variant: 'destructive', duration: 8000 });
-                } finally { setLoading(false); }
+                  console.log('🔵 Starting Google Sign-In...');
+                  
+                  // Try popup first (faster), fallback to redirect if it fails
+                  try {
+                    const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
+                    if (result?.user) {
+                      console.log('✅ Popup Sign-In Success:', result.user.email);
+                      toast({ title: t("auth.loginSuccess"), duration: 3000 });
+                      navigate('/');
+                    }
+                  } catch (popupError: any) {
+                    console.log('⚠️ Popup error:', popupError.code);
+                    
+                    // If popup fails (e.g., blocked by browser), use redirect
+                    if (popupError.code === 'auth/popup-blocked' || 
+                        popupError.code === 'auth/popup-closed-by-user' ||
+                        popupError.code === 'auth/cancelled-popup-request') {
+                      console.log('🔄 Switching to redirect method...');
+                      await signInWithRedirect(firebaseAuth, firebaseGoogleProvider);
+                      // User will be redirected, getRedirectResult will handle success
+                    } else {
+                      throw popupError;
+                    }
+                  }
+                } catch (err: any) {
+                  setLoading(false);
+                  console.error('❌ Google Sign-In Failed:', err.code, err.message);
+                  
+                  // Provide specific error messages
+                  let errorMsg = err.message || String(err);
+                  if (err.code === 'auth/unauthorized-domain') {
+                    errorMsg = 'Domain not authorized in Firebase. Check Firebase Console → Authentication → Settings';
+                  } else if (err.code === 'auth/operation-not-allowed') {
+                    errorMsg = 'Google Sign-In not enabled. Enable it in Firebase Console → Authentication → Sign-in method';
+                  }
+                  
+                  toast({ 
+                    title: t("auth.error"), 
+                    description: errorMsg, 
+                    variant: 'destructive', 
+                    duration: 7000 
+                  });
+                }
               }}
             >
               <svg className="w-4 h-4" viewBox="0 0 533.5 544.3" xmlns="http://www.w3.org/2000/svg" aria-hidden>

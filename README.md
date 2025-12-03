@@ -186,14 +186,14 @@ npm run preview
 
 ### Edge Function Configuration
 
-- `CACHE_TTL_SECONDS` (default: 300) — Cache duration for scraped results in seconds
+- `CACHE_TTL_SECONDS` (default: 300) — Cac he duration for scraped results in seconds
 - `RATE_LIMIT_WINDOW` (default: 3600) — Sliding window length in seconds
 - `RATE_LIMIT_MAX` (default: 30) — Maximum requests per IP within the window
 - `MAX_FETCH_REVIEWS` (default: 200) — Maximum number of reviews to fetch per page
 
 ## Support
 
-If you encounter any issues or have questions, please open an issue on GitHub or contact the maintainers.
+If you encounter any issues or  have questions, please open an issue on GitHub or contact the maintainers.
 
 ---
 

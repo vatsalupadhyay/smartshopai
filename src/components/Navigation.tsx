@@ -1,14 +1,21 @@
-
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { ShoppingBag, Menu } from "lucide-react";
+import { ShoppingBag, Menu, ChevronDown, Heart } from "lucide-react";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
 import { firebaseAuth } from "@/integrations/firebase/client";
 import { onAuthStateChanged, signOut as firebaseSignOut, UserInfo } from "firebase/auth";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface FbUser extends UserInfo {
   photoURL: string | null;
@@ -63,11 +70,7 @@ export const Navigation = () => {
         <div className="flex h-16 items-center justify-between">
           {/* Logo - Far Left */}
           <button
-            onClick={(e) => {
-              e.preventDefault();
-              const el = document.getElementById('hero');
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }}
+            onClick={() => navigate('/')}
             className="flex items-center gap-2 focus:outline-none"
             aria-label={t('brand.name', 'SmartShop AI')}
           >
@@ -81,25 +84,77 @@ export const Navigation = () => {
 
           {/* Desktop Navigation - Center */}
           <div className="hidden md:flex items-center gap-6 absolute left-1/2 transform -translate-x-1/2">
-            <a href="#features" onClick={(e) => { e.preventDefault(); const el = document.getElementById('features'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
+            <button onClick={() => { navigate('/'); setTimeout(() => { const el = document.getElementById('features'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="relative text-sm font-medium text-foreground/80 hover:text-primary hover:scale-105 transition-all duration-300 group">
               {t("nav.features", "Features")}
-            </a>
-            <a href="#price-prediction" onClick={(e) => { e.preventDefault(); const el = document.getElementById('price-prediction'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
+              <span className="absolute left-0 bottom-0 w-0 h-0.5 bg-gradient-primary group-hover:w-full transition-all duration-300"></span>
+            </button>
+            
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="relative text-sm font-medium text-foreground/80 hover:text-primary hover:scale-105 transition-all duration-300 group flex items-center gap-1 outline-none">
+                  Store
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="w-48">
+                <DropdownMenuLabel>Shop by Category</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate('/store?category=men')}>
+                  Men's Collection
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store?category=women')}>
+                  Women's Collection
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store?category=kids')}>
+                  Kids' Collection
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Shop by Type</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate('/store?type=tshirts')}>
+                  T-Shirts
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store?type=shirts')}>
+                  Shirts
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store?type=jeans')}>
+                  Jeans
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store?type=pants')}>
+                  Pants
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/store')}>
+                  View All Products
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            
+            <button onClick={() => { navigate('/'); setTimeout(() => { const el = document.getElementById('review-detection'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="relative text-sm font-medium text-foreground/80 hover:text-primary hover:scale-105 transition-all duration-300 group">
+              {t('nav.fakeReviews', 'Fake Review')}
+              <span className="absolute left-0 bottom-0 w-0 h-0.5 bg-gradient-primary group-hover:w-full transition-all duration-300"></span>
+            </button>
+
+            <button onClick={() => { navigate('/'); setTimeout(() => { const el = document.getElementById('price-prediction'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="relative text-sm font-medium text-foreground/80 hover:text-primary hover:scale-105 transition-all duration-300 group">
               Price Prediction
-            </a>
-            <a href="#review-detection" onClick={(e) => { e.preventDefault(); const el = document.getElementById('review-detection'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
-              {t("nav.reviewDetection", "Review Detection")}
-            </a>
-            <a href="#dashboard" onClick={(e) => { e.preventDefault(); const el = document.getElementById('dashboard'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
-              {t("nav.dashboard", "Dashboard")}
-            </a>
-            <a href="#assistant" onClick={(e) => { e.preventDefault(); const el = document.getElementById('assistant'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="text-sm font-medium text-foreground/80 hover:text-foreground transition-colors">
-              {t("nav.assistant", "AI Assistant")}
-            </a>
+              <span className="absolute left-0 bottom-0 w-0 h-0.5 bg-gradient-primary group-hover:w-full transition-all duration-300"></span>
+            </button>
+            
+            <button onClick={() => { navigate('/'); setTimeout(() => { const el = document.getElementById('assistant'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="relative text-sm font-medium text-foreground/80 hover:text-primary hover:scale-105 transition-all duration-300 group">
+              AI Assistant
+              <span className="absolute left-0 bottom-0 w-0 h-0.5 bg-gradient-primary group-hover:w-full transition-all duration-300"></span>
+            </button>
           </div>
 
           {/* Language & Login - Far Right */}
           <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden md:inline-flex"
+              onClick={() => navigate('/wishlist')}
+            >
+              <Heart className="w-5 h-5" />
+            </Button>
             <div className="hidden md:block">
               <LanguageSelector />
             </div>
@@ -135,21 +190,41 @@ export const Navigation = () => {
       {isOpen && (
         <div className="md:hidden border-t border-border/40 bg-background/95 backdrop-blur">
           <div className="px-6 py-4 space-y-3">
-            <a href="#features" className="block text-sm font-medium text-foreground/80 hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setIsOpen(false); const el = document.getElementById('features'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
+            <button onClick={() => { navigate('/'); setIsOpen(false); setTimeout(() => { const el = document.getElementById('features'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300">
               {t("nav.features", "Features")}
-            </a>
-            <a href="#price-prediction" className="block text-sm font-medium text-foreground/80 hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setIsOpen(false); const el = document.getElementById('price-prediction'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
+            </button>
+            
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase">Store</p>
+              <button onClick={() => { navigate('/store?category=men'); setIsOpen(false); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300 pl-3">
+                Men's Collection
+              </button>
+              <button onClick={() => { navigate('/store?category=women'); setIsOpen(false); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300 pl-3">
+                Women's Collection
+              </button>
+              <button onClick={() => { navigate('/store?category=kids'); setIsOpen(false); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300 pl-3">
+                Kids' Collection
+              </button>
+              <button onClick={() => { navigate('/store'); setIsOpen(false); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300 pl-3">
+                All Products
+              </button>
+            </div>
+            
+            <button onClick={() => { navigate('/'); setIsOpen(false); setTimeout(() => { const el = document.getElementById('review-detection'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300">
+              {t('nav.fakeReviews', 'Fake Review')}
+            </button>
+
+            <button onClick={() => { navigate('/'); setIsOpen(false); setTimeout(() => { const el = document.getElementById('price-prediction'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300">
               Price Prediction
-            </a>
-            <a href="#review-detection" className="block text-sm font-medium text-foreground/80 hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setIsOpen(false); const el = document.getElementById('review-detection'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
-              {t("nav.reviewDetection", "Review Detection")}
-            </a>
-            <a href="#dashboard" className="block text-sm font-medium text-foreground/80 hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setIsOpen(false); const el = document.getElementById('dashboard'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
-              {t("nav.dashboard", "Dashboard")}
-            </a>
-            <a href="#assistant" className="block text-sm font-medium text-foreground/80 hover:text-foreground transition-colors" onClick={(e) => { e.preventDefault(); setIsOpen(false); const el = document.getElementById('assistant'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
-              {t("nav.assistant", "AI Assistant")}
-            </a>
+            </button>
+            
+            <button onClick={() => { navigate('/'); setIsOpen(false); setTimeout(() => { const el = document.getElementById('assistant'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300">
+              AI Assistant
+            </button>
+            
+            <button onClick={() => { navigate('/wishlist'); setIsOpen(false); }} className="block w-full text-left text-sm font-medium text-foreground/80 hover:text-primary hover:translate-x-1 transition-all duration-300">
+              Wishlist
+            </button>
             <div className="pt-2 space-y-2">
               <LanguageSelector />
               {fbUser ? (

@@ -12,18 +12,8 @@ export const Hero = () => {
   return (
     <section
       id="hero"
-      className="relative py-0 md:py-0 overflow-hidden"
+      className="relative min-h-screen flex items-center overflow-x-hidden"
     >
-      {/* Background Image */}
-      <div className="absolute inset-0 -z-10">
-        <img
-          src={heroImage}
-          alt="AI Shopping Technology"
-          className="w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-background/95 via-background/85 to-background/95" />
-      </div>
-
       {/* Content */}
       <div className="w-full px-6 md:px-20 lg:px-40">
         <div className="flex flex-col items-center gap-5">
@@ -43,12 +33,12 @@ export const Hero = () => {
               </div>
 
               {/* Heading */}
-              <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05]">
+              <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight py-3">
                 {t("hero.title", "Smart Shopping with")}{" "}
-                <span className="block bg-gradient-primary bg-clip-text text-transparent">
+                <span className="block bg-gradient-primary bg-clip-text text-transparent py-2">
                   {t("hero.subtitle", "AI-Powered Intelligence")}
                 </span>
-                <span className="block">
+                <span className="block py-1">
                   {t("hero.titleSuffix", "Insights")}
                 </span>
               </h1>
@@ -101,7 +91,7 @@ export const Hero = () => {
           </div>
 
           {/* Stats (tighter spacing) */}
-          <div className="grid grid-cols-3 gap-6 pt-2 w-full max-w-2xl mx-auto">
+          {/* <div className="grid grid-cols-3 gap-6 pt-2 w-full max-w-2xl mx-auto">
             <div className="flex flex-col items-center">
               <p className="text-3xl md:text-4xl font-bold bg-gradient-accent bg-clip-text text-transparent">99%</p>
               <p className="text-sm text-muted-foreground mt-1">{t("hero.stats.fakeReviewDetection", "Fake Review Detection")}</p>
@@ -116,7 +106,7 @@ export const Hero = () => {
               <p className="text-3xl md:text-4xl font-bold bg-gradient-accent bg-clip-text text-transparent">4</p>
               <p className="text-sm text-muted-foreground mt-1">{t("hero.stats.languagesSupported", "Languages Supported")}</p>
             </div>
-          </div>
+          </div> */}
 
         </div>
       </div>

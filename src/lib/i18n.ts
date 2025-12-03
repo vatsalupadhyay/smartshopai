@@ -7,6 +7,7 @@ const resources = {
     translation: {
       // Navigation
       "nav.features": "Features",
+      "nav.fakeReviews": "Fake Review",
       "nav.dashboard": "Dashboard",
       "nav.assistant": "AI Assistant",
       "nav.login": "Login",
@@ -132,15 +133,67 @@ const resources = {
       "pricePrediction.predictionFailedTitle": "Prediction failed",
       "pricePrediction.predictionFailedDesc": "Failed to predict: {{err}}",
       "pricePrediction.lastPrice": "Last price: ${{price}}",
-      "pricePrediction.predictedAvg": "Predicted avg (next {{days}} days): ${{avg}}",
+      "pricePrediction.predictedAvg": "Predicted Avg (next {{days}} days): ${{avg}}",
       "pricePrediction.trend": "Trend: {{trend}} ({{pct}}%)",
       "pricePrediction.recommendation": "Recommendation: {{rec}} (confidence: {{conf}}%)",
+
+      // Store page
+      "store.title": "Our",
+      "store.subtitle": "Store",
+      "store.description": "Discover amazing products across all categories",
+      "store.filter": "Filter",
+      "store.allCategories": "All Categories",
+      "store.menCollection": "Men's Collection",
+      "store.womenCollection": "Women's Collection",
+      "store.kidsCollection": "Kids' Collection",
+      "store.allTypes": "All Types",
+      "store.tshirts": "T-Shirts",
+      "store.shirts": "Shirts",
+      "store.jeans": "Jeans",
+      "store.pants": "Pants",
+      "store.productsFound": "{{count}} products found",
+      "store.viewDetails": "View Details",
+      "store.buyNow": "Buy Now",
+      "store.bestPrice": "Best Price",
+      "store.reviews": "{{count}} reviews",
+      "store.addedToWishlist": "Added to Wishlist",
+      "store.addedToWishlistDesc": "{{name}} has been added to your wishlist.",
+      "store.removedFromWishlist": "Removed from Wishlist",
+      "store.removedFromWishlistDesc": "Item has been removed from your wishlist.",
+      "store.loginRequired": "Login Required",
+      "store.loginRequiredDesc": "Please login to add items to your wishlist.",
+      "store.error": "Error",
+      "store.errorDesc": "Failed to add item to wishlist.",
+      "store.alreadyInWishlist": "Already in Wishlist",
+      "store.alreadyInWishlistDesc": "This item is already in your wishlist.",
+      "store.noProductsFound": "No products found matching your filters.",
+      "store.clearFilters": "Clear Filters",
+      "store.description": "Description",
+      "store.category": "Category",
+      "store.productId": "Product ID",
+      "store.availability": "Availability",
+      "store.inStock": "In Stock",
+      "store.addToWishlist": "Add to Wishlist",
+      "store.removeFromWishlist": "Remove from Wishlist",
+
+      // Wishlist page
+      "wishlist.title": "My",
+      "wishlist.subtitle": "Wishlist",
+      "wishlist.description": "Track your favorite products and price changes",
+      "wishlist.empty": "Your wishlist is empty",
+      "wishlist.emptyDesc": "Start adding products to your wishlist to track prices",
+      "wishlist.browseProducts": "Browse Products",
+      "wishlist.totalSavings": "Total Savings",
+      "wishlist.priceDropped": "Price dropped by",
+      "wishlist.priceIncreased": "Price increased by",
+      "wishlist.removeFromWishlist": "Remove from Wishlist",
     }
   },
   hi: {
     translation: {
       // Navigation
       "nav.features": "सुविधाएँ",
+      "nav.fakeReviews": "नकली समीक्षा",
       "nav.dashboard": "डैशबोर्ड",
       "nav.assistant": "एआई सहायक",
       "nav.login": "लॉगिन",
@@ -275,6 +328,7 @@ const resources = {
     translation: {
       // Navigation
       "nav.features": "அம்சங்கள்",
+      "nav.fakeReviews": "போலி விமர்சனம்",
       "nav.dashboard": "டாஷ்போர்டு",
       "nav.assistant": "AI உதவியாளர்",
       "nav.login": "உள்நுழை",
@@ -409,6 +463,7 @@ const resources = {
     translation: {
       // Navigation
       "nav.features": "Características",
+      "nav.fakeReviews": "Reseñas Falsas",
       "nav.dashboard": "Panel",
       "nav.assistant": "Asistente IA",
       "nav.login": "Iniciar sesión",

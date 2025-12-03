@@ -418,12 +418,10 @@ Deno.serve(async (req) => {
         if (seen.has(key)) suspiciousReasons.push('duplicate');
         seen.add(key);
 
-        // Mark as fake if 2+ red flags, questionable if 1 flag
-        if (suspiciousReasons.length >= 2) {
+        // Mark as fake if 1+ red flags
+        if (suspiciousReasons.length >= 1) {
           fakeCount++;
-          detailed.push(`Review ${i+1}: SUSPICIOUS - ${suspiciousReasons.join(', ')}. "${r.slice(0,100)}..."`);
-        } else if (suspiciousReasons.length === 1) {
-          detailed.push(`Review ${i+1}: QUESTIONABLE (${suspiciousReasons[0]}). "${r.slice(0,100)}..."`);
+          detailed.push(`Review ${i+1}: FAKE - ${suspiciousReasons.join(', ')}. "${r.slice(0,100)}..."`);
         } else {
           detailed.push(`Review ${i+1}: GENUINE. "${r.slice(0,100)}..."`);
         }

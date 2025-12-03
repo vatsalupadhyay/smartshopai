@@ -38,6 +38,113 @@ export type Database = {
         }
         Relationships: []
       }
+      wishlists: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          name?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      wishlist_items: {
+        Row: {
+          id: string
+          wishlist_id: string
+          user_id: string
+          product_id: string
+          product_name: string
+          product_price: number
+          product_image: string | null
+          product_category: string | null
+          product_description: string | null
+          initial_price: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          wishlist_id: string
+          user_id: string
+          product_id: string
+          product_name: string
+          product_price: number
+          product_image?: string | null
+          product_category?: string | null
+          product_description?: string | null
+          initial_price: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          wishlist_id?: string
+          user_id?: string
+          product_id?: string
+          product_name?: string
+          product_price?: number
+          product_image?: string | null
+          product_category?: string | null
+          product_description?: string | null
+          initial_price?: number
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wishlist_items_wishlist_id_fkey"
+            columns: ["wishlist_id"]
+            referencedRelation: "wishlists"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wishlist_items_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      price_history: {
+        Row: {
+          id: string
+          wishlist_item_id: string
+          price: number
+          recorded_at: string
+        }
+        Insert: {
+          id?: string
+          wishlist_item_id: string
+          price: number
+          recorded_at?: string
+        }
+        Update: {
+          id?: string
+          wishlist_item_id?: string
+          price?: number
+          recorded_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "price_history_wishlist_item_id_fkey"
+            columns: ["wishlist_item_id"]
+            referencedRelation: "wishlist_items"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never
